@@ -25,3 +25,5 @@ vite.config.ts.timestamp-*
 # Reports (ignore Excel files)
 static/reports/*
 ldd/
+dist/
+.venv/

@@ -1,19 +1,24 @@
 <script lang="ts">
-	import CloudUpload from "@lucide/svelte/icons/cloud-upload";
-	import FileSpreadsheet from "@lucide/svelte/icons/file-spreadsheet";
-	import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+	import { Button } from "$lib/components/ui/button/index.js";
 	import * as Card from "$lib/components/ui/card/index.js";
 	import { Input } from "$lib/components/ui/input/index.js";
 	import { Separator } from "$lib/components/ui/separator/index.js";
-	import { parseExcelBuffer } from "$lib/qos/excel-parser";
+	import { getExcelSheetNames, parseExcelBuffer } from "$lib/parsers/qos-parser";
 	import { useQosState } from "$lib/qos/qos-state.svelte";
 	import { bunRpc, rpcReady } from "$lib/rpc";
+	import CloudUpload from "@lucide/svelte/icons/cloud-upload";
+	import FileSpreadsheet from "@lucide/svelte/icons/file-spreadsheet";
+	import LoaderCircle from "@lucide/svelte/icons/loader-circle";
 
 	const qosState = useQosState();
 
 	let loading = $state(false);
 	let dragOver = $state(false);
 	let errorMessage = $state("");
+	let selectedFile = $state<File | null>(null);
+	let selectedFileBuffer = $state<ArrayBuffer | null>(null);
+	let sheetNames = $state<string[]>([]);
+	let selectedSheet = $state("");
 	let fileInput: HTMLInputElement | undefined = $state();
 
 	async function handleFile(file: File) {
@@ -36,14 +41,37 @@
 		loading = true;
 		try {
 			const buffer = await file.arrayBuffer();
-			const result = await parseExcelBuffer(buffer);
+			const availableSheets = await getExcelSheetNames(buffer);
+			if (availableSheets.length === 0) {
+				errorMessage = "No sheets found in the spreadsheet.";
+				return;
+			}
+
+			selectedFile = file;
+			selectedFileBuffer = buffer;
+			sheetNames = availableSheets;
+			selectedSheet = availableSheets[0] ?? "";
+		} catch (err) {
+			errorMessage = err instanceof Error ? err.message : "Failed to parse file.";
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function loadSelectedSheet() {
+		if (!selectedFile || !selectedFileBuffer || !selectedSheet) return;
+
+		loading = true;
+		errorMessage = "";
+		try {
+			const result = await parseExcelBuffer(selectedFileBuffer, selectedSheet);
 			if (result.areas.size === 0) {
 				errorMessage = "No valid data found in the spreadsheet.";
 				return;
 			}
 
 			qosState.reset();
-			qosState.loadData(result, file.name);
+			qosState.loadData(result, selectedFile.name);
 
 			if (rpcReady) {
 				const { config } = await bunRpc.request.getQosConfig({});
@@ -102,7 +130,7 @@
 		<Card.Root>
 			<Card.Content class="space-y-4 pt-6">
 				<div
-					class="relative flex min-h-[180px] cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed transition-colors {dragOver
+					class="relative flex min-h-45 cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed transition-colors {dragOver
 						? 'border-primary bg-primary/5'
 						: 'border-border hover:border-muted-foreground/50'}"
 					ondrop={onDrop}
@@ -144,8 +172,35 @@
 
 				<div class="space-y-2">
 					<label for="qos-file-name" class="text-xs text-muted-foreground">File name</label>
-					<Input id="qos-file-name" placeholder="Select a report file above" disabled />
+					<Input
+						id="qos-file-name"
+						value={selectedFile?.name ?? ""}
+						placeholder="Select a report file above"
+						disabled
+					/>
 				</div>
+
+				{#if sheetNames.length > 0}
+					<div class="space-y-2">
+						<p class="text-xs text-muted-foreground">Sheets</p>
+						<div class="flex flex-wrap gap-2">
+							{#each sheetNames as sheet}
+								<Button
+									variant={selectedSheet === sheet ? "default" : "outline"}
+									size="sm"
+									onclick={() => (selectedSheet = sheet)}
+								>
+									{sheet}
+								</Button>
+							{/each}
+						</div>
+						<div class="pt-1 justify-end flex">
+							<Button onclick={loadSelectedSheet} disabled={loading || !selectedSheet}>
+								Load
+							</Button>
+						</div>
+					</div>
+				{/if}
 			</Card.Content>
 		</Card.Root>
 

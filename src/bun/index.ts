@@ -1,89 +1,82 @@
-import { BrowserView, BrowserWindow, Updater } from "electrobun/bun";
-import type { AppRPC } from "../shared/rpc";
-import { getQosConfig, saveQosConfig } from "./db";
-import { runWipeTask } from "./background";
 import { Effect } from "effect";
+import { BrowserView, BrowserWindow, Updater } from "electrobun/bun";
+import type { AppRPC, QosConfig } from "../shared/rpc";
+import { runWipeTask } from "./background";
+import { DbService, DbServiceLive } from "./services/db-service";
 
 const DEV_SERVER_PORT = 5173;
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
-const DEV_SERVER_TIMEOUT_MS = 800;
+const DEV_SERVER_TIMEOUT_MS = 3000;
 
-const log = (message: string) => {
-	const stamp = new Date().toISOString();
-	console.log(`[bun] ${stamp} ${message}`);
-};
+const log = (msg: string) => console.log(`[bun] ${new Date().toISOString()} ${msg}`);
 
-// Check if Vite dev server is running for HMR
 async function getMainViewUrl(): Promise<string> {
 	log("Resolving main view url...");
 	const channel = await Updater.localInfo.channel();
 	if (channel === "dev") {
 		try {
 			const timeout = new Promise((_, reject) =>
-				setTimeout(() => reject(new Error("dev server timeout")), DEV_SERVER_TIMEOUT_MS),
+				setTimeout(() => reject(new Error("timeout")), DEV_SERVER_TIMEOUT_MS),
 			);
 			await Promise.race([fetch(DEV_SERVER_URL, { method: "HEAD" }), timeout]);
-			log(`HMR enabled: Using Vite dev server at ${DEV_SERVER_URL}`);
+			log(`HMR enabled: ${DEV_SERVER_URL}`);
 			return DEV_SERVER_URL;
 		} catch {
-			log("Vite dev server not reachable. Falling back to packaged view.");
+			log("Vite dev server not reachable, falling back to packaged view.");
 		}
 	}
 	return "views://mainview/index.html";
 }
 
-// Create the main application window
-const url = await getMainViewUrl();
-log(`Main view url resolved: ${url}`);
+// ─── Bootstrap the app using Effect ───
 
-const rpcHandlers = {
-	getQosConfig: async () => ({
-		config: await getQosConfig(),
-	}),
-	saveQosConfig: async (params: Parameters<typeof saveQosConfig>[0]) => {
-		await saveQosConfig(params);
-		return { ok: true };
-	},
-};
+const appProgram = Effect.gen(function* () {
+	const dbService = yield* DbService;
 
-const rpc = BrowserView.defineRPC<AppRPC>({
-	handlers: {
-		requests: {
-			...rpcHandlers,
-			_: async (method, params) => {
-				if (method === "getQosConfig") return rpcHandlers.getQosConfig(params as any);
-				if (method === "saveQosConfig") return rpcHandlers.saveQosConfig(params as any);
-				throw new Error(`Unhandled RPC request: ${String(method)}`);
+	// Helper: run an Effect from an async RPC handler
+	const run = <A>(effect: Effect.Effect<A, unknown, DbService>) =>
+		Effect.runPromise(Effect.provide(effect, DbServiceLive));
+
+	const url = yield* Effect.promise(() => getMainViewUrl());
+	log(`Main view url resolved: ${url}`);
+
+	const rpc = BrowserView.defineRPC<AppRPC>({
+		handlers: {
+			requests: {
+				getQosConfig: async () => ({
+					config: await run(dbService.getQosConfig()),
+				}),
+				saveQosConfig: async (params: QosConfig) => {
+					await run(dbService.saveQosConfig(params));
+					return { ok: true as const };
+				},
 			},
+			messages: {},
 		},
-		messages: {},
-	},
+	});
+
+	const mainWindow = new BrowserWindow({
+		title: "Svelte App",
+		url,
+		frame: { width: 900, height: 700, x: 200, y: 200 },
+		rpc,
+	});
+
+	log("BrowserWindow created.");
+	setTimeout(() => {
+		try {
+			mainWindow.show();
+			mainWindow.focus();
+		} catch (err) {
+			log(`Failed to show window: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}, 150);
+
+	// Start the background wipe task (runs forever via schedule)
+	yield* Effect.forkChild(runWipeTask);
+
+	log("App started.");
 });
 
-const mainWindow = new BrowserWindow({
-	title: "Svelte App",
-	url,
-	frame: {
-		width: 900,
-		height: 700,
-		x: 200,
-		y: 200,
-	},
-	rpc,
-});
-
-log("BrowserWindow created.");
-setTimeout(() => {
-	try {
-		mainWindow.show();
-		mainWindow.focus();
-	} catch (err) {
-		log(`Failed to show window: ${err instanceof Error ? err.message : String(err)}`);
-	}
-}, 150);
-
-log("Svelte app started!");
-
-
-// Start background wipe task
-Effect.runFork(runWipeTask);
+// Run the app with the live DB layer
+Effect.runFork(appProgram.pipe(Effect.provide(DbServiceLive)));
