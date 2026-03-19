@@ -18,14 +18,37 @@ export default {
 		},
 		// Ignore Vite output in watch mode — HMR handles view rebuilds separately
 		watchIgnore: ["dist/**"],
+		
+		// Code signing (configure for production)
 		mac: {
 			bundleCEF: false,
+			// codeSign: {
+			// 	identity: "Developer ID Application: Your Name",
+			// 	teamId: "YOUR_TEAM_ID",
+			// },
+			// notarize: {
+			// 	appleId: "your.apple.id@example.com",
+			// 	teamId: "YOUR_TEAM_ID",
+			// 	password: "@keychain:AC_PASSWORD",
+			// },
 		},
 		linux: {
 			bundleCEF: false,
 		},
 		win: {
 			bundleCEF: false,
+			// codeSign: {
+			// 	certificateFile: "./path/to/certificate.p12",
+			// 	certificatePassword: "your-password",
+			// },
+		},
+		
+		// Update configuration
+		update: {
+			// URL for update checks
+			url: "https://your-domain.com/updates",
+			// How often to check for updates (in hours)
+			checkInterval: 24,
 		},
 	},
 } satisfies ElectrobunConfig;
